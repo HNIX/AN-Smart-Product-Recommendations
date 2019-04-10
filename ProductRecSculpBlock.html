@@ -1,0 +1,450 @@
+{* debug *}
+{$debug = 0}
+
+{* get configs - blockData variables *}
+{$smart_prod_recs.config.num_of_days = $blockData.configs.lookback_window}
+{$smart_prod_recs.config.start_time = ""}
+{$smart_prod_recs.config.min_to_display = $blockData.configs.min_of_products_to_display_multiples_of_2_}
+{$smart_prod_recs.config.max_to_display = $blockData.configs.max_of_products_to_display_multiples_of_2_}
+{$smart_prod_recs.config.exclude_sold_out = $blockData.configs.exclude_sold_out_tagged_products}
+{$smart_prod_recs.config.exclude_do_not_recommend = $blockData.configs.exclude_donotrecommend_tagged_products}
+{$smart_prod_recs.config.exclude_subscription = $blockData.configs.exclude_subscription_tagged_products}
+{$smart_prod_recs.config.exclude_other = $blockData.configs.other_product_tags_to_exclude_comma_separated_}
+{$smart_prod_recs.config.exclude_cart_items = $blockData.configs.exclude_cart_items}
+{$smart_prod_recs.config.default_recommendation = $blockData.configs.default_recommendations_by_productid_comma_separated_}
+{$smart_prod_recs.config.for_international_contacts = $blockData.configs.for_international_contacts}
+{* get configs - hardcoded *}
+{$smart_prod_recs.config.digital_tags = ["Programs"]}
+{$smart_prod_recs.config.digital_tags_types = ["Books", "DVD", "Program"]}
+{$smart_prod_recs.config.tags_to_exclude = []}
+
+{* data variables *}
+{$smart_prod_recs.data.qualified_product_ids = []}
+
+{* get lookback window start time *}
+{math assign="result" equation="abs({$blockData.configs.lookback_window}) * -1"}
+{$smart_prod_recs.config.num_of_days = ($result|cat:' days')}
+{$smart_prod_recs.config.start_time = $smart_prod_recs.config.num_of_days|date_format:'Y-m-d\Th:i:s.000+0000'}
+
+{* for international contacts *}
+{if $contact.default_address.country == "United States of America" || $contact.default_address.country == "United States" || (empty($contact.default_address.country) && empty($contact.international))}
+  {* USA *}
+  {$smart_prod_recs.contact.data.is_international = false}
+{else}
+  {* non-USA *}
+  {$smart_prod_recs.contact.data.is_international = true}
+  {* check if "stopMessage" for international contacts *}
+  {if $smart_prod_recs.config.for_international_contacts == "Stop message"}
+    {stopMessage}
+  {/if}
+{/if}
+
+{* get cart item product ids *}
+{$cart_product_id = []}
+{foreach $contact.cart.cartitems as $cart_item}
+  {$cart_product_id[] = $cart_item.productID}
+{/foreach}
+
+{* START: check if "Do not display" for international contacts *}
+{if $smart_prod_recs.contact.data.is_international && $smart_prod_recs.config.for_international_contacts == "Do not display"}
+  {* renders nothing here *}
+{else}
+
+  {if $smart_prod_recs.config.for_international_contacts != "Display digital only"}
+
+    {* START: GETTER - tag exclusions *}
+
+      {* push digital products tags into tag exclusion variable *}
+      {foreach $smart_prod_recs.config.digital_tags as $digi_tag}
+        {$smart_prod_recs.config.tags_to_exclude[] = $digi_tag}
+      {/foreach}
+
+      {* get user-defined products to exclude (by tag name, comma-separated) *}
+      {if !$utils->strContains('Lorem ipsum', $smart_prod_recs.config.exclude_other)}
+        {* NOTE: Is case-sensitive (e.g. lower, UPPER, whitespaces *}
+        {$smart_prod_recs.config.tags_to_exclude = ','|explode:$smart_prod_recs.config.exclude_other}
+      {/if}
+
+      {* get all sold out products to exclude (if checkmarked) *}
+      {if $smart_prod_recs.config.exclude_sold_out}
+        {$smart_prod_recs.config.tags_to_exclude[] = "Sold Out"}
+        {$smart_prod_recs.config.tags_to_exclude[] = " Sold Out"}
+        {$smart_prod_recs.config.tags_to_exclude[] = "Sold_Out"}
+      {/if}
+
+      {* get do-not-recommend products to exclude (if checkmarked) *}
+      {if $smart_prod_recs.config.exclude_do_not_recommend}
+        {$smart_prod_recs.config.tags_to_exclude[] = "DoNotRecommend"}
+      {/if}
+
+      {* get subscription products to exclude (if checkmarked) *}
+      {if $smart_prod_recs.config.exclude_subscription}
+        {$smart_prod_recs.config.tags_to_exclude[] = "Subscription"}
+      {/if}
+
+      {* dedupe array of tags_to_exclude *}
+      {$smart_prod_recs.config.tags_to_exclude = array_unique($smart_prod_recs.config.tags_to_exclude)}
+    {* END: GETTER - tag exclusions *}
+
+    {* debug *}
+    {if $debug == 1} <h1>Debug Configs: </h1><pre>{$utils->jsonPrettyPrint($smart_prod_recs.config)}</pre><br> {/if}
+
+    {if !$smart_prod_recs.config.exclude_cart_items}
+      {* CART ITEMS *}
+      {if $debug == 1} <h1>Debug Contact Cart Items: </h1>{$utils->jsonPrettyPrint($contact.cart.cartitems)}<br> {/if}
+      {$product_records.query = ['productID'=>['in'=>$cart_product_id]]}
+      {$product_records.limit = null}
+      {$product_records.sort = []}
+      {$product_records.cacheMinutes = 60}
+      {$product_records.data = $supplements->getProducts($product_records.query, $product_records.limit, $product_records.sort, $product_records.cacheMinutes)}
+      {* {if $debug == 1} <h1>Debug Cart Items Lookup:</h1>{$utils->jsonPrettyPrint($product_records.data)}<br>{/if} *}
+      {* {if $debug == 1} <h1>Debug Cart Items Lookup (Count):</h1>{count($product_records.data)}<br>{/if} *}
+      {$tmp = []}
+      {foreach $product_records.data as $item}
+        {$product_id = $item.productID}
+        {$intersect = array_intersect($item.tags, $smart_prod_recs.config.tags_to_exclude)}
+        {if count($intersect) == 0}
+          {* no overlap *}
+          {$tmp[] = $product_id}
+          {if !in_array($product_id, $smart_prod_recs.data.qualified_product_ids)}
+            {$smart_prod_recs.data.qualified_product_ids[] = $product_id}
+          {/if}
+        {/if}
+      {/foreach}
+      {if $debug == 1} <h1>Debug Cart Items that Qualify:</h1>{$utils->jsonPrettyPrint($tmp)}<br>{/if}
+    {/if}
+
+    {* BROWSE ITEMS *}
+    {$event_records.eventName = 'browse'}
+    {$event_records.newerThan = $smart_prod_recs.config.start_time}
+    {$event_records.properties = []}
+    {$event_records.limit = -1}
+    {$event_records.sort = ['column'=>'ats','direction'=>'DESC']}
+    {$event_records.data = $supplements->getEventRecords($event_records.eventName, $event_records.newerThan, $event_records.properties, $event_records.limit, $event_records.sort)}
+    {if $debug == 1} <h1>Debug Browse Events:</h1>{$utils->jsonPrettyPrint($event_records.data)}<br>{/if}
+    {$tmp = []}
+    {foreach $event_records.data as $event}
+      {$product_id = $event.properties.productid}
+      {* if exclude cart item *}
+      {if $smart_prod_recs.config.exclude_cart_items}
+        {if in_array($product_id, $cart_product_id)}
+          {continue}
+        {/if}
+      {/if}
+      {$intersect = array_intersect($product_id, $smart_prod_recs.config.tags_to_exclude)}
+      {if count($intersect) == 0}
+        {* no overlap *}
+        {$tmp[] = $product_id}
+        {if !in_array($product_id, $smart_prod_recs.data.qualified_product_ids)}
+          {$smart_prod_recs.data.qualified_product_ids[] = $product_id}
+        {/if}
+      {/if}
+    {/foreach}
+    {if $debug == 1} <h1>Debug Browse Event Items that Qualify:</h1>{$utils->jsonPrettyPrint($tmp)}<br>{/if}
+
+    {* DEFAULT ITEMS *}
+    {* {if count($smart_prod_recs.data.qualified_product_ids) < $smart_prod_recs.config.max_to_display} *}
+      {* {$smart_prod_recs.config.default_recommendation = ','|explode:$smart_prod_recs.config.default_recommendation} *}
+      {$tmp = ','|explode:$smart_prod_recs.config.default_recommendation}
+      {$tmp2 = []}
+      {* if exclude cart item *}
+      {foreach $tmp as $id}
+        {if $smart_prod_recs.config.exclude_cart_items}
+          {if in_array($id, $cart_product_id)}
+            {continue}
+          {/if}
+        {/if}
+        {$tmp2[]=$id}
+      {/foreach}
+      {* trim whitespaces *}
+      {$smart_prod_recs.config.default_recommendation = $tmp2}
+      {for $i = 0 to (count($smart_prod_recs.config.default_recommendation)-1)}
+        {$smart_prod_recs.config.default_recommendation[$i] = $smart_prod_recs.config.default_recommendation[$i]|trim}
+      {/for}
+      {if $debug == 1}<h1>Debug Default Recommendations Array:</h1>{$utils->jsonPrettyPrint($smart_prod_recs.config.default_recommendation)}<br>{/if}
+      {if $debug == 1}<h1>Debug Default Recommendations Count:</h1>{count($smart_prod_recs.config.default_recommendation)}<br>{/if}
+      {* randomize *}
+      {$tmp=[]}
+      {$tmp2=[]}
+      {if $debug == 1}<h1>Debug max to display times 5:</h1>{$smart_prod_recs.config.max_to_display * 5}<br>{/if}
+
+      {for $i = 0 to 75}
+        {if count($tmp2) == count($smart_prod_recs.config.default_recommendation)} {break} {/if}
+        {$eq = "rand(0,"|cat:(count($smart_prod_recs.config.default_recommendation)-1)|cat:")"}
+        {$random_number = {math equation=$eq}}
+        {if $debug == 1}<h1>Debug random number:</h1>{$random_number}<br>{/if}
+
+        {if (!in_array($random_number, $tmp) && isset($smart_prod_recs.config.default_recommendation[$random_number]))}
+          {$tmp2[] = $smart_prod_recs.config.default_recommendation[$random_number]}
+        {/if}
+      {/for}
+      {$smart_prod_recs.config.default_recommendation = $tmp2}
+      {if $debug == 1}<h1>Debug randomization:</h1>{$utils->jsonPrettyPrint($tmp2)}<br>{/if}
+
+      {* query the products collection *}
+      {$default_product_records.query = ['productID'=>['in'=>$smart_prod_recs.config.default_recommendation]]}
+      {$default_product_records.limit = null}
+      {$default_product_records.sort = []}
+      {$default_product_records.cacheMinutes = 60}
+      {$default_product_records.data = $supplements->getProducts($default_product_records.query, $default_product_records.limit, $default_product_records.sort, $default_product_records.cacheMinutes)}
+      {if $debug == 1}<h1>Debug Default Recommendations Query Count:</h1>{count($default_product_records.data)}<br>{/if}
+      {$tmp=[]}
+      {foreach $default_product_records.data as $item}
+        {$product_id = $item.productID}
+        {$intersect = array_intersect($item.tags, $smart_prod_recs.config.tags_to_exclude)}
+        {if count($intersect) == 0}
+          {* no overlap *}
+          {$tmp[]=$product_id}
+          {if !in_array($product_id, $smart_prod_recs.data.qualified_product_ids)}
+            {$smart_prod_recs.data.qualified_product_ids[] = $product_id}
+          {/if}
+        {/if}
+      {/foreach}
+      {if $debug==1}<h1>Debug Default Recommendations:</h1>{$utils->jsonPrettyPrint($tmp)}<br>{/if}
+    {* {/if} *}
+
+  {elseif $smart_prod_recs.contact.data.is_international && $smart_prod_recs.config.for_international_contacts == "Display digital only"}
+    {* display digital products only *}
+    {$digital_product_records.query = ["properties.product_type"=>["in"=>$smart_prod_recs.config.digital_tags_types]]}
+    {$digital_product_records.limit = null}
+    {$digital_product_records.sort = []}
+    {$digital_product_records.cacheMinutes = 60}
+    {$digital_product_records.data = $supplements->getProducts($digital_product_records.query, $digital_product_records.limit, $digital_product_records.sort, $digital_product_records.cacheMinutes)}
+    {if $debug == 1} <h1>Debug Digital Products Count:</h1> {count($digital_product_records.data)}<br> {* {$utils->jsonPrettyPrint($digital_product_records.data)}<br> *} {/if}
+    {$tmp = []}
+    {foreach $digital_product_records.data as $digi_product}
+      {$product_id = $digi_product.productID}
+      {$intersect = array_intersect($product_id, $smart_prod_recs.config.tags_to_exclude)}
+      {if count($intersect) == 0}
+        {* no overlap *}
+        {$tmp[] = $product_id}
+        {if !in_array($product_id, $smart_prod_recs.data.qualified_product_ids)}
+          {$smart_prod_recs.data.qualified_product_ids[] = $product_id}
+        {/if}
+      {/if}
+    {/foreach}
+  {/if}
+
+  {if $debug == 1} <h1>Debug Data: </h1> {$utils->jsonPrettyPrint($smart_prod_recs.data)}<br>{/if}
+  {if $debug == 1} <h1>Debug Contact-Data: </h1> {$utils->jsonPrettyPrint($smart_prod_recs.contact.data)}<br>{/if}
+
+{/if}{* end of if-statement (not international contact) *}
+
+{if $debug == 1}<h1>Debug Qualified Product Count:</h1>{count($qualified_product_records.data)}<br>{/if}
+
+{if count($smart_prod_recs.data.qualified_product_ids) > 0}
+  {$qualified_product_records.query = ['productID'=>['in'=>$smart_prod_recs.data.qualified_product_ids]]}
+  {$qualified_product_records.limit = $smart_prod_recs.config.max_to_display}
+  {$qualified_product_records.sort = []}
+  {$qualified_product_records.cacheMinutes = null}
+  {$qualified_product_records.data = $supplements->getProducts($qualified_product_records.query, $qualified_product_records.limit, $qualified_product_records.sort, $qualified_product_records.cacheMinutes)}
+{/if}
+
+
+{* {if count($qualified_product_records.data_randomized) > 0} *}
+{if count($qualified_product_records.data) > 0}
+
+  {if $debug == 1}
+
+    {$debug_prod_recs = []}
+
+    {* {foreach $qualified_product_records.data_randomized as $prod_rec} *}
+    {foreach $qualified_product_records.data as $prod_rec}
+
+      {$tmp = []}
+      {foreach from=$prod_rec item=item key=key}
+        {if $key != "properties"}
+          {$tmp[$key] = $prod_rec[$key]}
+        {/if}
+      {/foreach}
+      {$debug_prod_recs[] = $tmp}
+
+    {/foreach}
+    <h1>Debug Randomized Qualified Products:</h1>{$utils->jsonPrettyPrint($debug_prod_recs)}<br>
+  {/if}
+  {if $blockData.configs.include_image_top}
+ <div class="img-container center fixedwidth" align="center" style="padding-right: 10px;padding-left: 0px; padding-top: 0px; padding-bottom: 10px; ">
+												<!--[if mso]><table width="100%" cellpadding="0" cellspacing="0" border="0"><tr style="line-height:0px"><td style="padding-right: 0px;padding-left: 0px;" align="center"><![endif]-->
+												<div style="font-size:1px;line-height:10px">&nbsp;</div><a href="{'https://store.draxe.com/collections/popular-products'|appendQueryString:$utm_parameter}" data-crdl-key="ProductRec_Image" target="_blank"> <img class="fixedwidth" align="center" border="0" src="https://d1ok0qgebci2d3.cloudfront.net/729/1200x252/PeopleLikeYouLove.jpg" alt="People Like You Love..." title="People Like You Love..." style="outline: none; text-decoration: none; -ms-interpolation-mode: bicubic; clear: both; height: auto; float: none; border: none; width: 100%; max-width: 600px; display: block;" width="600"></a>
+												<!--[if mso]></td></tr></table><![endif]-->
+											</div>
+		{/if}
+											<div style="background-color:transparent;">
+    <div class="block-grid " style="Margin: 0 auto; min-width: 320px; max-width: 600px; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; background-color: transparent;;">
+      <div style="border-collapse: collapse;display: table;width: 100%;background-color:transparent;">
+        <!--[if (mso)|(IE)]><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:transparent;"><tr><td align="center"><table cellpadding="0" cellspacing="0" border="0" style="width:600px"><tr class="layout-full-width" style="background-color:transparent"><![endif]-->
+        <!--[if (mso)|(IE)]><td align="center" width="600" style="width:600px; border-top: 0px solid transparent; border-left: 0px solid transparent; border-bottom: 0px solid transparent; border-right: 0px solid transparent;" valign="top"><table width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding-right: 0px; padding-left: 0px; padding-top:5px; padding-bottom:5px;"><![endif]-->
+        <div class="col num12" style="min-width: 320px; max-width: 600px; display: table-cell; vertical-align: top;;">
+          <div style="width:100% !important;">
+            <!--[if (!mso)&(!IE)]><!-->
+            <div style="border-top:0px solid transparent; border-left:0px solid transparent; border-bottom:0px solid transparent; border-right:0px solid transparent; padding-top:5px; padding-bottom:5px; padding-right: 0px; padding-left: 0px;">
+              <!--<![endif]-->
+
+              <!--[if mso]></td></tr></table><![endif]-->
+
+                  {for $i = 0 to (count($qualified_product_records.data)-1)}
+
+                    {$product = $qualified_product_records.data[$i]}
+
+                    {if ($i%2 == 0)}
+                    <div style="font-size:16px;text-align:center;font-family:Tahoma, Verdana, Segoe, sans-serif">
+                    <div style="padding-top: 0px; padding-bottom:0px;">
+                      <table align="center">
+                        <tr>
+                          <td bgcolor="#ffffff" align="center" height="100%" valign="top" width="100%" style="padding-bottom: 0px">
+                            <table border="0" cellpadding="0" cellspacing="0" align="center" width="100%" style="max-width:560px;">
+                              <tr>
+                    {/if}
+
+                              {* start: product 1 *}
+                                <td align="center" valign="top" width="50%">
+                                  <table cellspacing="0" cellpadding="0" border="0" width="100%" style="font-size: 14px;text-align: left;">
+                                    <tr>
+                                      <td style="text-align: center; padding: 0 10px;">
+                                        <a href="{$product.url|appendQueryString:$utm_parameter}" data-crdl-key="ProductRec"><img src="{$product.images.0}"
+                                            width="200" height alt="{$product.productName}" border="0"
+                                            align="center" style="width: 100%; max-width: 200px; background: #dddddd; font-family: sans-serif; font-size: 15px; line-height: 140%; color: #555555;" /></a>
+                                      </td>
+                                    </tr>
+                                    <tr>
+                                      <td height="83px" style="text-align: center;font-family: sans-serif; font-size: 15px; line-height: 140%; color: #555555; padding: 10px 10px 0;"
+                                        class="stack-column-center">
+                                        <p style="margin: 0;"> <a style="font-size:16px; text-decoration: none; color:#284B55; font-family:tahoma,geneva,sans-serif;"
+                                            href="{$product.url|appendQueryString:$utm_parameter}" data-crdl-key="ProductRec"</a>{$product.productName}</p>
+                                      </td>
+                                    </tr>
+                                    <tr>
+                                      <td valign="bottom"><br />
+                                        <a style="text-decoration:none" href="{$product.url|appendQueryString:$utm_parameter}" data-crdl-key="ProductRec">
+                                          <center> <img src="https://d1ok0qgebci2d3.cloudfront.net/729/1920x531/ShopNowCTAButton.png"
+                                              align="center" width="60%" /></center>
+                                          <br /><br />
+                                        </a>
+                                      </td>
+                                    </tr>
+
+                                  </table>
+                                </td>
+                                {* end: product 1 *}
+                    {if ( ($i%2) != 0 )}
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+                      </table>
+                    </div>
+                  </div>
+                    {/if}
+                  {/for}
+               </div>
+            <!--<![endif]-->
+          </div>
+        </div>
+        <!--[if (mso)|(IE)]></td></tr></table><![endif]-->
+        <!--[if (mso)|(IE)]></td></tr></table></td></tr></table><![endif]-->
+      </div>
+    </div>
+  </div>
+
+{else}
+
+  <div style="background-color:transparent;">
+    <div class="block-grid " style="Margin: 0 auto; min-width: 320px; max-width: 600px; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; background-color: transparent;;">
+      <div style="border-collapse: collapse;display: table;width: 100%;background-color:transparent;">
+        <!--[if (mso)|(IE)]><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:transparent;"><tr><td align="center"><table cellpadding="0" cellspacing="0" border="0" style="width:600px"><tr class="layout-full-width" style="background-color:transparent"><![endif]-->
+        <!--[if (mso)|(IE)]><td align="center" width="600" style="width:600px; border-top: 0px solid transparent; border-left: 0px solid transparent; border-bottom: 0px solid transparent; border-right: 0px solid transparent;" valign="top"><table width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding-right: 0px; padding-left: 0px; padding-top:5px; padding-bottom:5px;"><![endif]-->
+        <div class="col num12" style="min-width: 320px; max-width: 600px; display: table-cell; vertical-align: top;;">
+          <div style="width:100% !important;">
+            <!--[if (!mso)&(!IE)]><!-->
+            <div style="border-top:0px solid transparent; border-left:0px solid transparent; border-bottom:0px solid transparent; border-right:0px solid transparent; padding-top:5px; padding-bottom:5px; padding-right: 0px; padding-left: 0px;">
+              <!--<![endif]-->
+
+              <!--[if mso]></td></tr></table><![endif]-->
+
+              {foreach $blockData.product_recs as $product}
+
+              <div style="font-size:16px;text-align:center;font-family:Tahoma, Verdana, Segoe, sans-serif">
+                <div style="padding-top: 0px; padding-bottom:0px;">
+                  <table align="center">
+                    <tr>
+                      <td bgcolor="#ffffff" align="center" height="100%" valign="top" width="100%" style="padding-bottom: 0px">
+                        <table border="0" cellpadding="0" cellspacing="0" align="center" width="100%" style="max-width:560px;">
+                          <tr>
+                          {* start: product 1 *}
+                            <td align="center" valign="top" width="50%">
+                              <table cellspacing="0" cellpadding="0" border="0" width="100%" style="font-size: 14px;text-align: left;">
+                                <tr>
+                                  <td style="text-align: center; padding: 0 10px;">
+                                    <a href="{$product.product_1_url|appendQueryString:$utm_parameter}" data-crdl-key="ProductRec"><img src="{$product.product_1_image}"
+                                        width="200" height alt="{$product.product_1_alt_text}" border="0"
+                                        align="center" style="width: 100%; max-width: 200px; background: #dddddd; font-family: sans-serif; font-size: 15px; line-height: 140%; color: #555555;" /></a>
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td height="83px" style="text-align: center;font-family: sans-serif; font-size: 15px; line-height: 140%; color: #555555; padding: 10px 10px 0;"
+                                    class="stack-column-center">
+                                    <p style="margin: 0;"> <a style="font-size:16px; text-decoration: none; color:#284B55; font-family:tahoma,geneva,sans-serif;"
+                                        href="{$blockData.product_recs.0.product_1_url|appendQueryString:$utm_parameter}" data-crdl-key="ProductRec"</a>{$blockData.product_recs.0.product_1_name}</p>
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td valign="bottom"><br />
+                                    <a style="text-decoration:none" href="{$product.product_1_url|appendQueryString:$utm_parameter}" data-crdl-key="ProductRec">
+                                      <center> <img src="https://d1ok0qgebci2d3.cloudfront.net/729/1920x531/ShopNowCTAButton.png"
+                                          align="center" width="60%" /></center>
+                                      <br /><br />
+                                    </a>
+                                  </td>
+                                </tr>
+
+                              </table>
+                            </td>
+                            {* end: product 1 *}
+                            {* start: product 2 *}
+                            <td align="center" valign="top" width="50%">
+                              <table cellspacing="0" cellpadding="0" border="0" width="100%" style="font-size: 14px;text-align: left;">
+                                <tr>
+                                  <td style="text-align: center; padding: 0 10px;">
+                                    <a href="{$product.product_2_url|appendQueryString:$utm_parameter}" data-crdl-key="ProductRec"> <img src="{$product.product_2_image}"
+                                        width="200" height alt="{$product.product_2_alt_text}" border="0"
+                                        align="center" style="width: 100%; max-width: 200px; background: #dddddd; font-family: sans-serif; font-size: 15px; line-height: 140%; color: #555555;" /></a>
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td height="83px" style="text-align: center;font-family: sans-serif; font-size: 15px; line-height: 140%; color: #555555; padding: 10px 10px 0;"
+                                    class="stack-column-center">
+                                    <p style="margin: 0;"> <a style="font-size:16px; text-decoration: none; color:#284B55; font-family:tahoma,geneva,sans-serif;"
+                                        href="{$product.product_2_url|appendQueryString:$utm_parameter}" data-crdl-key="ProductRec">{$product.product_2_name}</a></p>
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td valign="bottom"><br />
+                                    <a style="text-decoration:none" href="{$product.product_2_url|appendQueryString:$utm_parameter}" data-crdl-key="ProductRec">
+                                      <center> <img src="https://d1ok0qgebci2d3.cloudfront.net/729/1920x531/ShopNowCTAButton.png"
+                                          align="center" width="60%" /></center>
+                                      <br /><br />
+                                    </a>
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                            {* end: product 2 *}
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
+                </div>
+              </div>
+             </div>
+          <!--<![endif]-->
+        </div>
+      </div>
+      <!--[if (mso)|(IE)]></td></tr></table><![endif]-->
+      <!--[if (mso)|(IE)]></td></tr></table></td></tr></table><![endif]-->
+    </div>
+  </div>
+
+              {/foreach}
+
+{/if}
